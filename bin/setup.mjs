@@ -200,34 +200,45 @@ async function download(item, urls, dst, sha) {
         for await (const c of fs.createReadStream(part, { highWaterMark: 1 << 20 })) { hash.update(c); have += c.length; }
     }
     item.state = "active"; item.done = have;
-    for (let u = 0; u < urls.length; u++) {
-        const last = u === urls.length - 1;
-        item.note = u === 0 ? "" : "via mirror";
-        status = `Downloading ${item.label}` + (u ? " from a mirror" : "");
-        let r;
-        try { r = await get(urls[u], have > 0 ? { Range: `bytes=${have}-` } : {}); }
-        catch (e) { if (last) throw e; continue; }
-        const { res, req } = r;
-        if (res.statusCode === 416) { res.resume(); break; }
-        if (res.statusCode !== 200 && res.statusCode !== 206) { res.resume(); if (last) throw new Error(`HTTP ${res.statusCode}`); continue; }
-        if (have > 0 && res.statusCode === 200) { hash = crypto.createHash("sha256"); have = 0; item.done = 0; fs.rmSync(part, { force: true }); }
-        const out = fs.createWriteStream(part, { flags: "a" });
-        const t0 = Date.now(); let got = 0, slow = false;
-        try {
-            for await (const c of res) {
-                hash.update(c); have += c.length; got += c.length; item.done = have;
-                if (!out.write(c)) await new Promise((ok) => out.once("drain", ok));
-                const el = (Date.now() - t0) / 1000;
-                if (el > 0.5) speed = got / el;
-                draw();
-                if (!last && el >= 10 && got / el < (1 << 20)) { slow = true; req.destroy(); break; }   // slow: the next mirror
-            }
-        } catch (e) { if (!slow) { await new Promise((ok) => out.end(ok)); if (last) throw e; continue; } }
-        await new Promise((ok) => out.end(ok));
-        if (slow) continue;
-        break;
+    let complete = false;
+    // a dropped connection ("aborted") is normal on a long download: wait a moment and carry on from the byte where it stopped
+    for (let attempt = 0; attempt < 40 && !complete; attempt++) {
+        if (attempt > 0) { item.note = ""; status = `Connection dropped - retrying from ${fmtSize(have)} (try ${attempt} of 39) ...`; speed = 0; draw(true); await new Promise((ok) => setTimeout(ok, Math.min(2000 * attempt, 15000))); }
+        for (let u = 0; u < urls.length && !complete; u++) {
+            const last = u === urls.length - 1;
+            item.note = u === 0 ? "" : "via mirror";
+            status = `Downloading ${item.label}` + (u ? " from a mirror" : "");
+            let r;
+            try { r = await get(urls[u], have > 0 ? { Range: `bytes=${have}-` } : {}); }
+            catch (e) { continue; }
+            const { res, req } = r;
+            if (res.statusCode === 416) { res.resume(); complete = true; break; }
+            if (res.statusCode !== 200 && res.statusCode !== 206) { res.resume(); continue; }
+            if (have > 0 && res.statusCode === 200) { hash = crypto.createHash("sha256"); have = 0; item.done = 0; fs.rmSync(part, { force: true }); }
+            const startHave = have, cl = Number(res.headers["content-length"]) || 0;
+            const out = fs.createWriteStream(part, { flags: "a" });
+            const t0 = Date.now(); let got = 0, slow = false, broke = false;
+            try {
+                for await (const c of res) {
+                    hash.update(c); have += c.length; got += c.length; item.done = have;
+                    if (!out.write(c)) await new Promise((ok) => out.once("drain", ok));
+                    const el = (Date.now() - t0) / 1000;
+                    if (el > 0.5) speed = got / el;
+                    draw();
+                    if (!last && el >= 10 && got / el < (1 << 20)) { slow = true; req.destroy(); break; }   // slow: the next mirror
+                }
+            } catch (e) { if (!slow) broke = true; }
+            await new Promise((ok) => out.end(ok));
+            if (slow || broke) continue;
+            complete = !cl || have >= startHave + cl;
+        }
     }
+    if (!complete) { item.state = "failed"; throw new Error(`${item.label} could not be downloaded (the connection kept dropping). Run Install.bat again: it continues from where it stopped.`); }
     const got = hash.digest("hex");
+    if (got !== sha.toLowerCase() && !item.refetched) {   // corrupt: throw the file away and fetch it once more from the start
+        item.refetched = true; fs.rmSync(part, { force: true }); item.done = 0; status = "The download did not check out - fetching it again ..."; draw(true);
+        return download(item, urls, dst, sha);
+    }
     if (got !== sha.toLowerCase()) { fs.rmSync(part, { force: true }); item.state = "failed"; throw new Error(`${item.label} did not match its published checksum; it was deleted. Run Install.bat again.`); }
     fs.renameSync(part, dst);
     item.done = item.size; speed = 0;
@@ -266,6 +277,12 @@ async function setup() {
     process.stdout.write(`${ESC}2J${ESC}H${ESC}?25l`);
     const freeDisk = (() => { try { return fs.statfsSync(ROOT).bavail * fs.statfsSync(ROOT).bsize; } catch { return Infinity; } })();
     if (!fs.existsSync(MODEL) && freeDisk < CH.size + 1.5 * (1 << 30)) await fail(`The first start needs about ${fmtSize(CH.size + 1.5 * (1 << 30))} free on this drive; it has ${fmtSize(freeDisk)}.`);
+    // two windows installing at once would write into the same half-downloaded file and ruin it: only one at a time
+    const LOCK = path.join(HOME, "install.lock");
+    let other = 0; try { other = Number(fs.readFileSync(LOCK, "utf8")) || 0; } catch {}
+    if (other && other !== process.pid) { let alive = false; try { process.kill(other, 0); alive = true; } catch {} if (alive) await fail("Another AI-Portable window is already installing on this drive. Close it, or wait until it is finished."); }
+    try { fs.mkdirSync(HOME, { recursive: true }); fs.writeFileSync(LOCK, String(process.pid)); } catch {}
+    process.on("exit", () => { try { if (Number(fs.readFileSync(LOCK, "utf8")) === process.pid) fs.unlinkSync(LOCK); } catch {} });
     const timer = setInterval(() => draw(true), 250);
     try {
         for (const it of items) {
