@@ -73,7 +73,7 @@ Every start asks which model to use. The list is ordered by **last used** (the o
 |---|---|
 | **Windows** | 64-bit Windows 10 (1803 or newer) or Windows 11. `curl.exe` and `tar.exe` must be present (they come with Windows 10 1803+). |
 | **Processor** | Any 64-bit Intel/AMD processor with AVX (about 2011 or newer; AVX2 is faster). 4+ cores is better. No graphics card needed. |
-| **RAM** | 8 GB minimum, 16 GB recommended. About 4 GB (E2B) or 6.5 GB (E4B) should be **free** when you start: close browsers first. With less free RAM it uses a shorter context (8K instead of 32K). |
+| **RAM** | 8 GB minimum, 16 GB recommended. About 4 GB (E2B) or 6.5 GB (E4B) should be **free** when you start: close browsers first. With less free RAM it uses a shorter context (16K instead of 32K; each 8K of context costs only about 350 MB). Pi is always told the real context size. |
 | **Pendrive** | 5-7 GB free, exFAT or NTFS. USB 3 or faster is strongly recommended: each start reads the model from it. |
 | **Internet** | Only for the first install. |
 | **Not needed** | Administrator rights, installing anything, Python, a graphics card. |

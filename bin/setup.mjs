@@ -417,11 +417,7 @@ async function chooseWork() {
 async function run() {
     const agentDir = path.join(HOME, "pi-agent");
     const modelsJson = path.join(agentDir, "models.json");
-    {
-        fs.mkdirSync(agentDir, { recursive: true });
-        fs.writeFileSync(modelsJson, JSON.stringify({ providers: { local: { baseUrl: `http://127.0.0.1:${PORT}/v1`, api: "openai-completions", apiKey: "local",
-            models: [{ id: "gemma-4-local", name: CH.name + " (on this drive)", reasoning: !CH.custom, contextWindow: 32768, maxTokens: 8192 }] } } }, null, 2));
-    }
+    fs.mkdirSync(agentDir, { recursive: true });
     process.stdout.write(`${ESC}2J${ESC}H${ESC}?25h`);
     const freeGB = os.freemem() / (1 << 30), totalGB = os.totalmem() / (1 << 30);
     try {
@@ -451,7 +447,10 @@ async function run() {
     } catch {}
     let ctx = 32768;
     const needGB = CH.needGB;
-    if (freeGB < needGB) { console.log(paint("yellow", `  Less than ${needGB.toFixed(1)} GB of RAM is free: close other programs (browser tabs use a lot). Using a smaller context (8K).`)); ctx = 8192; }
+    if (freeGB < needGB) { console.log(paint("yellow", `  Less than ${needGB.toFixed(1)} GB of RAM is free: close other programs (browser tabs use a lot). Using a smaller context (16K).`)); ctx = 16384; }
+    // Pi must be told the context size the engine really has (it was told 32K while the engine had 8K: "request exceeds the available context size").
+    fs.writeFileSync(modelsJson, JSON.stringify({ providers: { local: { baseUrl: `http://127.0.0.1:${PORT}/v1`, api: "openai-completions", apiKey: "local",
+        models: [{ id: "gemma-4-local", name: CH.name + " (on this drive)", reasoning: !CH.custom, contextWindow: ctx, maxTokens: Math.min(8192, Math.floor(ctx / 4)) }] } } }, null, 2));
     const logical = os.cpus().length;
     const threads = logical > 4 ? Math.round(logical / 2) : Math.max(1, logical - 1);   // generation is memory-bound: one thread per physical core beats using every hyper-thread
     const logOut = fs.openSync(path.join(HOME, "engine.out.log"), "w"), logErr = fs.openSync(path.join(HOME, "engine.log"), "w");
