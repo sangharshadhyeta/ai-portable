@@ -559,7 +559,10 @@ async function run() {
 
     console.log(paint("dgray", `  Pi works in: ${work}`));
     await new Promise((r) => setTimeout(r, 800));
-    const pi = spawn(process.execPath, [PI_CLI, "--model", "local/gemma-4-local"], {
+    // Pi looks for skills, prompt templates, extensions and MCP servers in the chosen folder AND in every folder above it (for example
+    // C:\\Users\\you\\.agents\\skills), which would pull the PC's own setup into this drive's Pi and eat the small model's context.
+    // So only what is on the drive is used.
+    const pi = spawn(process.execPath, [PI_CLI, "--model", "local/gemma-4-local", "--no-skills", "--no-prompt-templates", "--no-extensions", "--no-mcp", "--no-approve"], {
         cwd: work, stdio: "inherit",
         env: { ...process.env, PI_CODING_AGENT_DIR: agentDir, PI_OFFLINE: "1", PI_TELEMETRY: "0", PI_SKIP_VERSION_CHECK: "1" } });
     await new Promise((r) => pi.on("exit", r));
