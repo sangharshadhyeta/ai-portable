@@ -22,8 +22,7 @@
 git clone https://github.com/sangharshadhyeta/ai-portable E:\AI-Portable
 ```
 
-Then follow the quick start below. (While the repository is private, you need to be signed in to GitHub to download.)
-
+Then follow the quick start below.
 ## Quick start
 
 1. Copy this folder to a pendrive formatted **exFAT or NTFS** (not FAT32, which cannot hold the model file).
