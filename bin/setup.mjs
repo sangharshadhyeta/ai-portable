@@ -119,6 +119,13 @@ const W = 66;
 const ESC = "\x1b[";
 const col = { cyan: "36", dcyan: "2;36", white: "97", gray: "37", dgray: "90", green: "32", yellow: "33", red: "31" };
 const paint = (c, s) => `${ESC}${col[c]}m${s}${ESC}0m`;
+// rainbow bar: each filled cell has its own hue along the whole bar width (24-bit colour), the empty part is dim
+function rainbowBar(fill, width) {
+    const hsv = (h) => { const f = (n) => { const k = (n + h / 60) % 6; return Math.round(255 * (1 - 0.82 * Math.max(0, Math.min(k, 4 - k, 1)))); }; return [f(5), f(3), f(1)]; };
+    let out = "";
+    for (let i = 0; i < fill; i++) { const [r, g, b] = hsv((i / Math.max(1, width - 1)) * 300); out += `${ESC}38;2;${r};${g};${b}m█`; }
+    return out + `${ESC}0m` + paint("dgray", "░".repeat(Math.max(0, width - fill)));
+}
 const pad = (s, n) => (s.length > n ? s.slice(0, n) : s + " ".repeat(n - s.length));
 const fmtSize = (b) => (b >= 1 << 30 ? `${(b / (1 << 30)).toFixed(2)} GB` : b >= 1 << 20 ? `${Math.round(b / (1 << 20))} MB` : `${Math.round(b / 1024)} KB`);
 const fmtLeft = (s) => (!isFinite(s) || s < 0 ? "" : s >= 3600 ? `${Math.floor(Math.round(s / 60) / 60)}h ${String(Math.round(s / 60) % 60).padStart(2, "0")}m left` : s >= 60 ? `${Math.ceil(s / 60)} min left` : `${Math.round(s)} s left`);
@@ -152,7 +159,7 @@ function draw(force = false) {
     const barW = W - 20;
     const barRow = (frac, right, c = "cyan") => {
         const fill = Math.floor(Math.max(0, Math.min(1, frac)) * barW);
-        return paint("dcyan", "  │ ") + paint(c, "█".repeat(fill) + "░".repeat(barW - fill)) + paint("white", pad(`  ${String(Math.floor(Math.max(0, Math.min(1, frac)) * 100)).padStart(3)}%  `, 8)) +
+        return paint("dcyan", "  │ ") + rainbowBar(fill, barW) + paint("white", pad(`  ${String(Math.floor(Math.max(0, Math.min(1, frac)) * 100)).padStart(3)}%  `, 8)) +
                paint("gray", pad(right, 10)) + paint("dcyan", " │");
     };
     const cur = items.find((x) => x.state === "active");
@@ -455,29 +462,103 @@ async function run() {
     const stop = () => { try { if (!engDead) eng.kill(); } catch {} };
     process.on("exit", stop);
     for (const s of ["SIGINT", "SIGTERM", "SIGHUP", "SIGBREAK"]) process.on(s, () => { stop(); process.exit(0); });
+    // Closing the terminal window can kill this program without letting it clean up, and the engine would keep the model in RAM.
+    // So a tiny hidden watcher outlives us: the moment this program is gone it ends the engine (and itself).
+    try {
+        const watcher = "const[p,e]=process.argv.slice(1).map(Number);const alive=(x)=>{try{process.kill(x,0);return true}catch{return false}};" +
+            "setInterval(()=>{if(!alive(e))process.exit(0);if(!alive(p)){try{process.kill(e,'SIGKILL')}catch{};process.exit(0)}},700);";
+        spawn(process.execPath, ["-e", watcher, String(process.pid), String(eng.pid)], { detached: true, stdio: "ignore", windowsHide: true }).unref();
+    } catch {}
 
-    // show llama.cpp's own log (it prints to stderr) while it loads the model
-    const logPath = path.join(HOME, "engine.log");
-    let logPos = 0;
-    const showLog = () => {
-        try {
-            const fd = fs.openSync(logPath, "r"), size = fs.fstatSync(fd).size;
-            if (size > logPos) { const buf = Buffer.alloc(size - logPos); fs.readSync(fd, buf, 0, buf.length, logPos); logPos = size; process.stdout.write(paint("dgray", buf.toString("utf8"))); }
-            fs.closeSync(fd);
-        } catch {}
-    };
+    // The loading display shows only things that are measured, never a made-up percentage:
+    //  - bytes read from this drive so far (Windows' own disk counter for the drive, read once a second with typeperf) and the live speed,
+    //  - how much memory the engine holds, and
+    //  - the engine's own latest log line (the whole log is in home\engine.log).
     const t0 = Date.now();
-    console.log(paint("dgray", "  Starting llama.cpp (the model is read from this drive as it is needed):\n"));
+    const memNow = () => {   // the engine's memory in bytes, from tasklist ("1,234,567 K")
+        try {
+            const r = spawnSync("tasklist", ["/FI", `PID eq ${eng.pid}`, "/FO", "CSV", "/NH"], { encoding: "utf8", windowsHide: true });
+            const m = /"([\d.,\s ]+) K"\s*$/m.exec((r.stdout || "").trim());
+            return m ? Number(m[1].replace(/\D/g, "")) * 1024 : 0;
+        } catch { return 0; }
+    };
+    let diskBytes = 0, diskRate = 0, diskSamples = 0, tpOn = true;
+    // Windows keeps a running total of the bytes read from each drive; we read it about once a second and show the difference
+    // since the start (a real measurement of what the engine pulls off the pendrive). One short PowerShell call per reading.
+    (async () => {
+        const drive = path.parse(MODEL).root.replace(/[\\/]+$/, "");   // "D:"
+        if (!/^[A-Za-z]:$/.test(drive)) return;
+        const q = `(Get-CimInstance Win32_PerfRawData_PerfDisk_LogicalDisk -Filter "Name='${drive}'").DiskReadBytesPersec`;
+        let base = null, prev = 0, prevT = 0;
+        while (tpOn) {
+            const v = await new Promise((res) => {
+                let o = ""; let p;
+                try { p = spawn("powershell.exe", ["-NoProfile", "-Command", q], { windowsHide: true, stdio: ["ignore", "pipe", "ignore"] }); }
+                catch { return res(NaN); }
+                p.stdout.on("data", (d) => (o += d)); p.on("error", () => res(NaN)); p.on("close", () => res(Number(o.trim())));
+            });
+            const now = Date.now();
+            if (Number.isFinite(v) && v > 0) {
+                if (base === null) base = v;
+                diskBytes = v - base;
+                if (prevT) diskRate = Math.max(0, (v - prev) / ((now - prevT) / 1000));
+                prev = v; prevT = now; diskSamples++;
+            } else { await new Promise((r) => setTimeout(r, 3000)); }
+            await new Promise((r) => setTimeout(r, 300));
+        }
+    })();
+    const stopTp = () => { tpOn = false; };
+    process.on("exit", stopTp);
+
+    const logPath = path.join(HOME, "engine.log");
+    const lastLog = () => {
+        try {
+            const fd = fs.openSync(logPath, "r"), size = fs.fstatSync(fd).size, n = Math.min(size, 4096), buf = Buffer.alloc(n);
+            fs.readSync(fd, buf, 0, n, size - n); fs.closeSync(fd);
+            const ls = buf.toString("utf8").split(/\r?\n/).map((x) => x.replace(/^\s*\d+\.\d+\.\d+\.\d+\s+[A-Z]\s+/, "").trim()).filter(Boolean);
+            return ls.length ? ls[ls.length - 1] : "";
+        } catch { return ""; }
+    };
+
+    const total = CH.size, bw = 40, W2 = Math.max(40, (process.stdout.columns || 100) - 4);
+    const clip = (s) => (s.length > W2 ? s.slice(0, W2 - 1) + "…" : s);
+    let shownMem = 0, shownDisk = 0, lastMove = Date.now(), spin = 0, first = true;
+    const frame = (frac, line2, line3, c = "cyan") => {
+        const f = Math.max(0, Math.min(1, frac)), n = Math.round(f * bw);
+        const out = [
+            `  ${c === "yellow" ? paint(c, "█".repeat(n)) + paint("dgray", "░".repeat(bw - n)) : rainbowBar(n, bw)}  ${String(Math.round(f * 100)).padStart(3)}%`,
+            `  ${paint("gray", clip(line2))}`,
+            `  ${paint("dgray", clip(line3))}`,
+        ];
+        process.stdout.write((first ? "" : `${ESC}3A`) + out.map((l) => `\r${l}${ESC}K`).join("\n") + "\n");
+        first = false;
+    };
+    console.log(paint("white", `  Loading ${CH.name} into memory`) + paint("dgray", "   (full log: home\\engine.log)\n"));
+    process.stdout.write(`${ESC}?25l`);
     while (!(await health())) {
-        showLog();
         if (engDead) {
-            showLog();
+            stopTp(); process.stdout.write(`${ESC}?25h`);
             console.log("\n" + paint("red", "  The engine stopped while loading. Log: home\\engine.log"));
+            try { const tail = fs.readFileSync(logPath, "utf8").trim().split(/\r?\n/).slice(-4).join("\n"); console.log(paint("dgray", tail)); } catch {}
             await waitEnter(); process.exit(1);
         }
+        const mem = memNow(), now = Date.now();
+        if (mem > shownMem + 1e6 || diskBytes > shownDisk + 1e6) lastMove = now;
+        shownMem = Math.max(shownMem, mem); shownDisk = diskBytes;
+        // progress = the larger of the two real measurements: bytes read from the drive, or bytes now held in the engine's memory
+        const frac = Math.min(0.99, Math.max(shownDisk, shownMem) / total);
+        const el = Math.round((now - t0) / 1000);
+        const driveTxt = diskSamples ? `reading from the drive: ${fmtSize(diskRate)}/s   ${fmtSize(Math.min(shownDisk, total * 4))} read so far` : "drive speed: measuring ...";
+        const stalled = now - lastMove > 20000;
+        frame(frac,
+            `${driveTxt}   |   engine memory: ${fmtSize(shownMem)}   |   ${el} s`,
+            stalled ? `still working - the drive is slow right now, nothing is wrong yet. llama.cpp: ${lastLog()}` : `llama.cpp: ${lastLog()}`,
+            stalled ? "yellow" : "cyan");
         await new Promise((r) => setTimeout(r, 500));
     }
-    showLog();
+    stopTp();
+    frame(1, `loaded in ${Math.round((Date.now() - t0) / 1000)} s`, "the engine answered its health check", "green");
+    process.stdout.write(`${ESC}?25h`);
     process.stdout.write(`\n  ${paint("green", "Ready after " + Math.round((Date.now() - t0) / 1000) + " s.")}\n`);
 
     console.log(paint("dgray", `  Pi works in: ${work}`));

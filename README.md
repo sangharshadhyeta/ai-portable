@@ -87,7 +87,8 @@ Measured with E4B on a Ryzen 7 7735U laptop (16 GB, USB drive): about **6.7 toke
 
 - **Small models are limited.** They are good for reading and explaining files, small edits, short scripts and single commands, and can lose their way on long multi-step tasks.
 - **Pi can read and change files** in the folder you choose. Pick it deliberately.
-- If a window is force-closed, the engine may keep running; the next start ends the leftover one. To free the RAM at once: `taskkill /IM llama-server.exe /F`.
+- **Closing the window frees the RAM.** Quitting Pi, pressing Ctrl+C or closing the terminal window stops the engine and releases the model from memory (a tiny hidden watcher ends the engine within about a second even if the window is closed abruptly). A leftover engine from an older run is also ended on the next start. To free the RAM by hand: `taskkill /IM llama-server.exe /F`.
+- **The loading screen shows measured values only:** a rainbow bar of how much of the model is in memory or has been read from the drive, the live drive read speed, the engine's memory, and llama.cpp's latest log line. If nothing moves for 20 seconds it says the drive is slow (not that something broke).
 
 ## What gets downloaded (into the folder)
 
