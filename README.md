@@ -2,7 +2,7 @@
 
 **A local coding assistant on a pendrive.** Gemma 4 runs on your PC's processor through [llama.cpp](https://github.com/ggml-org/llama.cpp), and the [Pi coding agent](https://www.npmjs.com/package/@earendil-works/pi-coding-agent) works with it in a terminal window. No account, no cloud, no install: everything lives in one folder on the drive. Windows 10/11, 64-bit.
 
-![AI from your pendrive: protect your data, works offline, no install](docs/ad.png)
+![AI from your pendrive: protect your data, works offline, nothing leaves your PC](docs/ad.png)
 
 ## Safety first: it runs with protection
 
