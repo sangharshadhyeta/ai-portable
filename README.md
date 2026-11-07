@@ -2,13 +2,13 @@
 
 **A local coding assistant on a pendrive.** Gemma 4 runs on your PC's processor through [llama.cpp](https://github.com/ggml-org/llama.cpp), and the [Pi coding agent](https://www.npmjs.com/package/@earendil-works/pi-coding-agent) works with it in a terminal window. No account, no cloud, no install: everything lives in one folder on the drive. Windows 10/11, 64-bit.
 
-![AI from your pendrive: zero data leakage, works offline, no install](docs/ad.png)
+![AI from your pendrive: protect your data, works offline, no install](docs/ad.png)
 
 ## Safety first: it runs with protection
 
 **Your files and prompts never leave your PC.** The model runs on your own processor, so there is no account, no API key and no cloud service to send anything to.
 
-- **No data leakage.** Nothing you type or open is sent anywhere. Telemetry and update checks are switched off, and the engine only listens on `127.0.0.1`, so nothing on your network can reach it. After the first install it works with the internet unplugged.
+- **Protect your data.** Nothing you type or open is sent anywhere. Telemetry and update checks are switched off, and the engine only listens on `127.0.0.1`, so nothing on your network can reach it. After the first install it works with the internet unplugged.
 - **Nothing installed, nothing left behind.** No administrator rights. The program's user, temp and app-data folders all point into the pendrive, so the PC gets no settings, history or temp files. Unplug the drive or delete the folder and it is gone. (Windows itself still notes that a USB drive was connected and that a program ran.)
 - **Verified downloads.** Node.js, llama.cpp and the model are each checked against a published SHA-256 before use. The launcher is plain readable text (`Install.bat`, `bin\launch.cmd`, `bin\setup.mjs`), so you can read exactly what it does.
 - **Be careful what you let the agent touch.** Pi starts in the folder you choose and can read and change files and run commands there. It is not a sandbox, and a small model can make mistakes. Pick a folder you have a copy of, keep important work backed up, and read what it proposes before you accept it.
