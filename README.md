@@ -2,6 +2,28 @@
 
 **A local coding assistant on a pendrive.** Gemma 4 runs on your PC's processor through [llama.cpp](https://github.com/ggml-org/llama.cpp), and the [Pi coding agent](https://www.npmjs.com/package/@earendil-works/pi-coding-agent) works with it in a terminal window. No account, no cloud, no install: everything lives in one folder on the drive. Windows 10/11, 64-bit.
 
+![AI from your pendrive: zero data leakage, works offline, no install](docs/ad.png)
+
+## Safety first: it runs with protection
+
+**Your files and prompts never leave your PC.** The model runs on your own processor, so there is no account, no API key and no cloud service to send anything to.
+
+- **No data leakage.** Nothing you type or open is sent anywhere. Telemetry and update checks are switched off, and the engine only listens on `127.0.0.1`, so nothing on your network can reach it. After the first install it works with the internet unplugged.
+- **Nothing installed, nothing left behind.** No administrator rights. The program's user, temp and app-data folders all point into the pendrive, so the PC gets no settings, history or temp files. Unplug the drive or delete the folder and it is gone. (Windows itself still notes that a USB drive was connected and that a program ran.)
+- **Verified downloads.** Node.js, llama.cpp and the model are each checked against a published SHA-256 before use. The launcher is plain readable text (`Install.bat`, `bin\launch.cmd`, `bin\setup.mjs`), so you can read exactly what it does.
+- **Be careful what you let the agent touch.** Pi starts in the folder you choose and can read and change files and run commands there. It is not a sandbox, and a small model can make mistakes. Pick a folder you have a copy of, keep important work backed up, and read what it proposes before you accept it.
+
+## Get it
+
+- **Easiest:** open the [latest release](https://github.com/sangharshadhyeta/ai-portable/releases/latest), download `AI-Portable-installer.zip` and unzip it onto your pendrive.
+- **From the repository:** use **Code > Download ZIP** on the [repo page](https://github.com/sangharshadhyeta/ai-portable), or clone it straight onto the drive (replace `E:` with your drive letter):
+
+```
+git clone https://github.com/sangharshadhyeta/ai-portable E:\AI-Portable
+```
+
+Then follow the quick start below. (While the repository is private, you need to be signed in to GitHub to download.)
+
 ## Quick start
 
 1. Copy this folder to a pendrive formatted **exFAT or NTFS** (not FAT32, which cannot hold the model file).
@@ -62,7 +84,6 @@ Measured with E4B on a Ryzen 7 7735U laptop (16 GB, USB drive): about **6.7 toke
 
 ## Good to know
 
-- **Nothing is installed on the PC and nothing is written to it.** The user, temp and app-data folders all point into the drive. (Windows itself still notes that a USB drive was connected and that a program ran.)
 - **Small models are limited.** They are good for reading and explaining files, small edits, short scripts and single commands, and can lose their way on long multi-step tasks.
 - **Pi can read and change files** in the folder you choose. Pick it deliberately.
 - If a window is force-closed, the engine may keep running; the next start ends the leftover one. To free the RAM at once: `taskkill /IM llama-server.exe /F`.
