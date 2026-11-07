@@ -356,6 +356,14 @@ function health() {
 }
 
 // Which folder Pi may work in. Dropping a folder on Install.bat skips the question; otherwise ask, remembering the last choice.
+// The launcher points the user/app-data folders at the drive, but Windows' folder window needs the real Desktop to start from
+// ("Unable to retrieve the root folder" otherwise). Only that one window gets the real profile folders; nothing else does.
+function realProfile() {
+    try {
+        const h = os.userInfo().homedir;
+        return { USERPROFILE: h, HOME: h, APPDATA: path.join(h, "AppData", "Roaming"), LOCALAPPDATA: path.join(h, "AppData", "Local") };
+    } catch { return {}; }
+}
 async function chooseWork() {
     const def = path.join(ROOT, "work"), lastFile = path.join(HOME, "workdir.txt");
     const isDir = (p) => { try { return fs.statSync(p).isDirectory(); } catch { return false; } };
@@ -363,7 +371,7 @@ async function chooseWork() {
     if (!chosen && process.stdin.isTTY) {
         let last = ""; try { last = fs.readFileSync(lastFile, "utf8").trim(); } catch {}
         const fallback = isDir(last) ? last : def;
-        const start = isDir(last) ? last : (process.env.USERNAME ? `C:\Users\${process.env.USERNAME}` : def);
+        const start = isDir(last) ? last : (realProfile().USERPROFILE || def);
         console.log(""); console.log(paint("white", "  Choose the folder Pi may work in  (it can read and change files there)"));
         console.log(paint("dgray", "  A folder window is opening - look in the taskbar if you do not see it. Waiting for you ..."));
         // the standard Windows folder window, via the PowerShell every Windows has. We wait until it is closed.
@@ -375,7 +383,7 @@ async function chooseWork() {
         const r = await new Promise((res) => {
             let out = "", err = "";
             const child = spawn("powershell.exe", ["-NoProfile", "-STA", "-ExecutionPolicy", "Bypass", "-Command", ps],
-                { stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, AIP_START: start } });
+                { stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, AIP_START: start, ...realProfile() } });
             child.stdout.on("data", (d) => (out += d)); child.stderr.on("data", (d) => (err += d));
             child.on("error", (e) => res({ out: "", err: String(e.message) }));
             child.on("exit", () => res({ out: out.trim(), err: err.trim() }));
