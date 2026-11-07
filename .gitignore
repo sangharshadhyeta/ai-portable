@@ -1,0 +1,12 @@
+# downloaded onto the drive on first start
+/engine/
+/node/
+/pi/
+/models/
+/home/
+/work/
+/node.zip.part
+# local files
+/Start.lnk
+/*.zip
+/docs/_src/
