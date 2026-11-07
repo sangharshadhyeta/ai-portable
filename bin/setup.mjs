@@ -474,36 +474,33 @@ async function run() {
     //  - how much memory the engine holds, and
     //  - the engine's own latest log line (the whole log is in home\engine.log).
     const t0 = Date.now();
-    const memNow = () => {   // the engine's memory in bytes, from tasklist ("1,234,567 K")
-        try {
-            const r = spawnSync("tasklist", ["/FI", `PID eq ${eng.pid}`, "/FO", "CSV", "/NH"], { encoding: "utf8", windowsHide: true });
-            const m = /"([\d.,\s ]+) K"\s*$/m.exec((r.stdout || "").trim());
-            return m ? Number(m[1].replace(/\D/g, "")) * 1024 : 0;
-        } catch { return 0; }
-    };
-    let diskBytes = 0, diskRate = 0, diskSamples = 0, tpOn = true;
-    // Windows keeps a running total of the bytes read from each drive; we read it about once a second and show the difference
-    // since the start (a real measurement of what the engine pulls off the pendrive). One short PowerShell call per reading.
+    // One short PowerShell call about once a second measures three real things at once (nothing here blocks the screen):
+    //  - the running total of bytes Windows has read from this drive (we show the difference since the start, and the live speed),
+    //  - how much memory the engine holds, and
+    //  - how much processor time the engine has used (it grows while the engine is busy, e.g. preparing the model).
+    let diskBytes = 0, diskRate = 0, diskSamples = 0, memBytes = 0, cpuSecs = 0, tpOn = true;
     (async () => {
         const drive = path.parse(MODEL).root.replace(/[\\/]+$/, "");   // "D:"
-        if (!/^[A-Za-z]:$/.test(drive)) return;
-        const q = `(Get-CimInstance Win32_PerfRawData_PerfDisk_LogicalDisk -Filter "Name='${drive}'").DiskReadBytesPersec`;
+        const dq = /^[A-Za-z]:$/.test(drive) ? `(Get-CimInstance Win32_PerfRawData_PerfDisk_LogicalDisk -Filter "Name='${drive}'").DiskReadBytesPersec` : "0";
+        const q = `$d=${dq}; $p=Get-Process -Id ${eng.pid} -ErrorAction SilentlyContinue; "$d $($p.WorkingSet64) $([int]$p.CPU)"`;
         let base = null, prev = 0, prevT = 0;
         while (tpOn) {
-            const v = await new Promise((res) => {
+            const out = await new Promise((res) => {
                 let o = ""; let p;
                 try { p = spawn("powershell.exe", ["-NoProfile", "-Command", q], { windowsHide: true, stdio: ["ignore", "pipe", "ignore"] }); }
-                catch { return res(NaN); }
-                p.stdout.on("data", (d) => (o += d)); p.on("error", () => res(NaN)); p.on("close", () => res(Number(o.trim())));
+                catch { return res(""); }
+                p.stdout.on("data", (d) => (o += d)); p.on("error", () => res("")); p.on("close", () => res(o.trim()));
             });
-            const now = Date.now();
-            if (Number.isFinite(v) && v > 0) {
-                if (base === null) base = v;
-                diskBytes = v - base;
-                if (prevT) diskRate = Math.max(0, (v - prev) / ((now - prevT) / 1000));
-                prev = v; prevT = now; diskSamples++;
-            } else { await new Promise((r) => setTimeout(r, 3000)); }
-            await new Promise((r) => setTimeout(r, 300));
+            const [d, ws, cpu] = out.split(/\s+/).map(Number), now = Date.now();
+            if (Number.isFinite(ws) && ws > 0) memBytes = Math.max(memBytes, ws);
+            if (Number.isFinite(cpu)) cpuSecs = Math.max(cpuSecs, cpu);
+            if (Number.isFinite(d) && d > 0) {
+                if (base === null) base = d;
+                diskBytes = d - base;
+                if (prevT) diskRate = Math.max(0, (d - prev) / ((now - prevT) / 1000));
+                prev = d; prevT = now; diskSamples++;
+            }
+            await new Promise((r) => setTimeout(r, out ? 300 : 3000));
         }
     })();
     const stopTp = () => { tpOn = false; };
@@ -521,7 +518,7 @@ async function run() {
 
     const total = CH.size, bw = 40, W2 = Math.max(40, (process.stdout.columns || 100) - 4);
     const clip = (s) => (s.length > W2 ? s.slice(0, W2 - 1) + "…" : s);
-    let shownMem = 0, shownDisk = 0, lastMove = Date.now(), spin = 0, first = true;
+    let shownMem = 0, shownDisk = 0, shownCpu = 0, lastMove = Date.now(), spin = 0, first = true;
     const frame = (frac, line2, line3, c = "cyan") => {
         const f = Math.max(0, Math.min(1, frac)), n = Math.round(f * bw);
         const out = [
@@ -541,16 +538,16 @@ async function run() {
             try { const tail = fs.readFileSync(logPath, "utf8").trim().split(/\r?\n/).slice(-4).join("\n"); console.log(paint("dgray", tail)); } catch {}
             await waitEnter(); process.exit(1);
         }
-        const mem = memNow(), now = Date.now();
-        if (mem > shownMem + 1e6 || diskBytes > shownDisk + 1e6) lastMove = now;
-        shownMem = Math.max(shownMem, mem); shownDisk = diskBytes;
+        const now = Date.now();
+        if (memBytes > shownMem + 1e6 || diskBytes > shownDisk + 1e6 || cpuSecs > shownCpu + 0.5) lastMove = now;
+        shownMem = Math.max(shownMem, memBytes); shownDisk = diskBytes; shownCpu = Math.max(shownCpu, cpuSecs); spin++;
         // progress = the larger of the two real measurements: bytes read from the drive, or bytes now held in the engine's memory
         const frac = Math.min(0.99, Math.max(shownDisk, shownMem) / total);
         const el = Math.round((now - t0) / 1000);
-        const driveTxt = diskSamples ? `reading from the drive: ${fmtSize(diskRate)}/s   ${fmtSize(Math.min(shownDisk, total * 4))} read so far` : "drive speed: measuring ...";
+        const driveTxt = diskSamples ? `drive: ${fmtSize(diskRate)}/s, ${fmtSize(Math.min(shownDisk, total * 4))} read` : "drive: measuring ...";
         const stalled = now - lastMove > 20000;
         frame(frac,
-            `${driveTxt}   |   engine memory: ${fmtSize(shownMem)}   |   ${el} s`,
+            `${SPIN[spin % 4]} ${driveTxt}  |  memory: ${fmtSize(shownMem)}  |  CPU: ${Math.round(shownCpu)} s  |  ${el} s`,
             stalled ? `still working - the drive is slow right now, nothing is wrong yet. llama.cpp: ${lastLog()}` : `llama.cpp: ${lastLog()}`,
             stalled ? "yellow" : "cyan");
         await new Promise((r) => setTimeout(r, 500));
