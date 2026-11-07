@@ -55,17 +55,18 @@ Close the window to stop everything. Dropping a folder onto `Start` skips the fo
 
 ## Choosing the model
 
-The first start asks which model to use:
+Every start asks which model to use. The list is ordered by **last used** (the one you used last is number 1, so Enter picks it), and it shows what is already on the drive and what can be downloaded:
 
-| | Model | Size | RAM | |
-|---|---|---|---|---|
-| 1 | Gemma 4 **E2B** (Q4_K_M) | 3.1 GB | about 4 GB | lighter, faster to load, less capable (**default**) |
-| 2 | Gemma 4 **E4B** (Q4_K_M) | 5.0 GB | about 6.5 GB | smarter |
-| 3 | **Any GGUF model on Hugging Face** | - | about 1.3 x file size | type its name as `owner/repo`, then pick a file |
+```
+   1  Gemma 4 E2B       on this drive    lighter and faster to load, about 4 GB of RAM, less capable
+   2  Gemma 4 E4B       download 5.0 GB  smarter, needs about 6.5 GB of free RAM
+   3  Another one from Hugging Face: type its name (owner/repo)
+```
 
-The choice is saved in `home\model.txt`. To change it later, delete that file and start again; you are asked again and the new model is downloaded if it is missing. Several models can sit in `models\` side by side.
-
-For option 3 the file size and SHA-256 are taken from Hugging Face and checked after the download. Use a model with a chat template (an "it" / instruct model) and a single `.gguf` file; multi-part files are not offered.
+- **E2B** (3.1 GB) is the default on a first start; **E4B** (5.0 GB) is smarter but needs more RAM.
+- **Any GGUF model on Hugging Face:** type its name as `owner/repo` (or pick the last line and type it), then choose a file. Its size and SHA-256 are taken from Hugging Face and checked after the download. Use an instruct ("it") model with a chat template and a single `.gguf` file; multi-part files are not offered.
+- A model you download this way is remembered and appears in the list from then on. A `.gguf` file you copy into `models\` by hand is listed too.
+- The list and the order are kept in `home\models.json`.
 
 ## System requirements
 

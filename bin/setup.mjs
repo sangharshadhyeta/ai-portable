@@ -58,34 +58,48 @@ async function customModel(ask, spec) {
     return { name: repo.split("/")[1].replace(/-GGUF$/i, ""), repo, file: f.path, size: f.lfs.size, sha: f.lfs.oid,
              needGB: Math.max(3, f.lfs.size / 1e9 * 1.3), custom: true, info: "" };
 }
-function saved() { try { return fs.readFileSync(MODEL_TXT, "utf8").trim(); } catch { return ""; } }
-let CHOICE = saved(), CH = null;
-if (MODELS[CHOICE.toLowerCase()]) { CHOICE = CHOICE.toLowerCase(); CH = MODELS[CHOICE]; }
-else if (CHOICE.startsWith("hf:")) { CH = await customModel(async () => "", CHOICE.slice(3)).catch(() => null); }   // re-read its details (no questions asked)
-if (!CH) {
-    CHOICE = "e2b"; CH = MODELS.e2b;
+// ---- which model: asked on every start; the list is ordered by last use and shows what is on the drive and what can be downloaded ----
+const MODELS_DIR = path.join(ROOT, "models"), REG = path.join(HOME, "models.json");
+let reg = { custom: [], used: {} };
+try { reg = { ...reg, ...JSON.parse(fs.readFileSync(REG, "utf8")) }; } catch {}
+if (!Object.keys(reg.used).length) { const old = (() => { try { return fs.readFileSync(MODEL_TXT, "utf8").trim().toLowerCase(); } catch { return ""; } })(); if (MODELS[old]) reg.used[MODELS[old].file] = Date.now(); }   // an earlier version's choice
+const saveReg = () => { try { fs.mkdirSync(HOME, { recursive: true }); fs.writeFileSync(REG, JSON.stringify(reg, null, 2)); } catch {} };
+function catalog() {
+    const list = [MODELS.e2b, MODELS.e4b, ...reg.custom];
+    const seen = new Set(list.map((m) => m.file.toLowerCase()));
+    let files = []; try { files = fs.readdirSync(MODELS_DIR).filter((f) => /\.gguf$/i.test(f)); } catch {}
+    for (const f of files) if (!seen.has(f.toLowerCase())) {   // a model file somebody put there by hand
+        const size = fs.statSync(path.join(MODELS_DIR, f)).size;
+        list.push({ name: f.replace(/\.gguf$/i, ""), file: f, size, sha: "", needGB: Math.max(3, size / 1e9 * 1.3), local: true, info: "" });
+    }
+    return list.map((m, i) => ({ ...m, i, installed: fs.existsSync(path.join(MODELS_DIR, m.file)), used: reg.used[m.file] || 0 }))
+        .sort((a, b) => (b.used - a.used) || (Number(b.installed) - Number(a.installed)) || (a.i - b.i));
+}
+let CH = null;
+{
+    const list = catalog();
+    CH = list[0];
     if (process.stdin.isTTY) {
         const rl = (await import("node:readline")).createInterface({ input: process.stdin, output: process.stdout });
         const ask = (q) => new Promise((r) => rl.question(q, r));
-        console.log("\n  Which model?\n");
-        console.log(`   1  ${MODELS.e2b.name}   ${MODELS.e2b.info}  (default)`);
-        console.log(`   2  ${MODELS.e4b.name}   ${MODELS.e4b.info}`);
-        console.log("   3  Another one from Hugging Face: type its name (owner/repo, e.g. unsloth/gemma-3-4b-it-GGUF)\n");
+        console.log("\n  Which model?  (the one you used last is first)\n");
+        list.forEach((m, k) => console.log(`   ${k + 1}  ${m.name.padEnd(28)} ${(m.installed ? "on this drive" : "download " + (m.size / 1e9).toFixed(1) + " GB").padEnd(18)} ${m.info || ""}`));
+        console.log(`   ${list.length + 1}  Another one from Hugging Face: type its name (owner/repo, e.g. unsloth/gemma-3-4b-it-GGUF)\n`);
         let a = (await ask("  Enter = 1 > ")).trim();
-        if (a === "2") { CHOICE = "e4b"; CH = MODELS.e4b; }
-        else if (a === "3" || a.includes("/")) {
+        if (/^\d+$/.test(a) && list[+a - 1]) CH = list[+a - 1];
+        else if (a === String(list.length + 1) || a.includes("/")) {
             for (;;) {
-                if (a === "3" || !a) a = (await ask("  Hugging Face model (owner/repo) > ")).trim();
+                if (a === String(list.length + 1) || !a) a = (await ask("  Hugging Face model (owner/repo) > ")).trim();
                 if (!a) break;
                 const c = await customModel(ask, a);
-                if (c) { CH = c; CHOICE = `hf:${c.repo}/${c.file}`; break; }
-                console.log("  Could not find GGUF files for that name (is it spelled like owner/repo, and does it have .gguf files?). Try again, or press Enter for the default.");
+                if (c) { CH = c; if (!reg.custom.some((m) => m.file === c.file)) reg.custom.push({ name: c.name, repo: c.repo, file: c.file, size: c.size, sha: c.sha, needGB: c.needGB, custom: true, info: "" }); break; }
+                console.log("  Could not find GGUF files for that name (is it spelled like owner/repo, and does it have .gguf files?). Try again, or press Enter for the first one.");
                 a = "";
             }
         }
         rl.close();
     }
-    try { fs.mkdirSync(HOME, { recursive: true }); fs.writeFileSync(MODEL_TXT, CHOICE); } catch {}
+    reg.used[CH.file] = Date.now(); saveReg();
 }
 const MODEL_REPO = CH.repo, MODEL_FILE = CH.file, MODEL_SHA = CH.sha;
 const PORT = 8765;
@@ -344,39 +358,40 @@ function health() {
 // Which folder Pi may work in. Dropping a folder on Install.bat skips the question; otherwise ask, remembering the last choice.
 async function chooseWork() {
     const def = path.join(ROOT, "work"), lastFile = path.join(HOME, "workdir.txt");
-    const user = process.env.USERNAME || "", pcHome = user ? `C:\\Users\\${user}` : "";
     const isDir = (p) => { try { return fs.statSync(p).isDirectory(); } catch { return false; } };
     let chosen = WORK_ARG.replace(/^"|"$/g, "");
     if (!chosen && process.stdin.isTTY) {
         let last = ""; try { last = fs.readFileSync(lastFile, "utf8").trim(); } catch {}
-        const opts = [];
-        const add = (label, p) => { if (p && isDir(p) && !opts.some((o) => o.p.toLowerCase() === p.toLowerCase())) opts.push({ label, p }); };
-        add("Last used", last);
-        add("Pendrive work folder", def);
-        for (const base of [pcHome, pcHome && path.join(pcHome, "OneDrive")]) for (const n of ["Desktop", "Documents", "Downloads"]) add(n, base && path.join(base, n));
-        const fallback = opts[0] ? opts[0].p : def;
-        console.log(""); console.log(paint("white", "  Which folder should Pi work in?  (it can read and change files there)"));
-        opts.forEach((o, i) => console.log(`   ${paint("cyan", String(i + 1))}  ${o.label.padEnd(22)} ${paint("dgray", o.p)}`));
-        console.log(paint("dgray", "   A folder window is opening (look in the taskbar if you do not see it). Or here: type a number / paste a path, Enter = 1."));
-        // the standard Windows folder dialog, via the PowerShell that every Windows has
+        const fallback = isDir(last) ? last : def;
+        const start = isDir(last) ? last : (process.env.USERNAME ? `C:\Users\${process.env.USERNAME}` : def);
+        console.log(""); console.log(paint("white", "  Choose the folder Pi may work in  (it can read and change files there)"));
+        console.log(paint("dgray", "  A folder window is opening - look in the taskbar if you do not see it. Waiting for you ..."));
+        // the standard Windows folder window, via the PowerShell every Windows has. We wait until it is closed.
         const ps = "Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.Application]::EnableVisualStyles();" +
             "$f=New-Object System.Windows.Forms.Form; $f.TopMost=$true; $f.StartPosition='CenterScreen'; $f.Size=New-Object System.Drawing.Size(1,1); $f.Opacity=0; $f.Show(); $f.Activate();" +
             "$d=New-Object System.Windows.Forms.FolderBrowserDialog; $d.Description='Folder for Pi (the AI) to work in'; $d.ShowNewFolderButton=$true;" +
             "$d.SelectedPath=$env:AIP_START; if($d.ShowDialog($f) -eq 'OK'){[Console]::Out.Write($d.SelectedPath)}; $f.Close()";
-        // the window and the keyboard race: whichever answers first wins (so a hidden window can never block the start)
-        const rl = (await import("node:readline")).createInterface({ input: process.stdin, output: process.stdout });
-        const child = spawn("powershell.exe", ["-NoProfile", "-STA", "-ExecutionPolicy", "Bypass", "-Command", ps],
-            { stdio: ["ignore", "pipe", "ignore"], env: { ...process.env, AIP_START: fallback } });
-        let out = ""; child.stdout.on("data", (d) => (out += d));
-        const fromWindow = new Promise((res) => { child.on("exit", () => res(out.trim() || fallback)); child.on("error", () => res(null)); });
-        const fromKeys = new Promise((res) => rl.question("  > ", (a) => {
-            a = a.trim().replace(/^"|"$/g, "");
-            res(!a ? fallback : /^\d+$/.test(a) && opts[+a - 1] ? opts[+a - 1].p : a);
-        }));
-        let picked = await Promise.race([fromWindow, fromKeys]);
-        if (picked === null) picked = await fromKeys;   // PowerShell missing: keyboard only
-        try { child.kill(); } catch {} rl.close();
-        chosen = isDir(picked) ? picked : (console.log(paint("yellow", `  "${picked}" is not a folder; using ${fallback}`)), fallback);
+        const t0 = Date.now();
+        const r = await new Promise((res) => {
+            let out = "", err = "";
+            const child = spawn("powershell.exe", ["-NoProfile", "-STA", "-ExecutionPolicy", "Bypass", "-Command", ps],
+                { stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, AIP_START: start } });
+            child.stdout.on("data", (d) => (out += d)); child.stderr.on("data", (d) => (err += d));
+            child.on("error", (e) => res({ out: "", err: String(e.message) }));
+            child.on("exit", () => res({ out: out.trim(), err: err.trim() }));
+        });
+        if (r.out && isDir(r.out)) chosen = r.out;
+        else if (Date.now() - t0 < 2000 || r.err) {   // the window could not open at all (not a cancel): ask in the terminal instead
+            try { fs.appendFileSync(ERROR_LOG, `[${new Date().toISOString()}] folder window failed: ${r.err}\n`); } catch {}
+            console.log(paint("yellow", "  The folder window could not open. Type or paste a folder path (Enter = " + fallback + ")"));
+            const rl = (await import("node:readline")).createInterface({ input: process.stdin, output: process.stdout });
+            const a = await new Promise((res) => rl.question("  > ", res)); rl.close();
+            const typed = a.trim().replace(/^"|"$/g, "");
+            chosen = typed && isDir(typed) ? typed : fallback;
+        } else {
+            console.log(paint("dgray", `  No folder picked: using ${fallback}`));
+            chosen = fallback;
+        }
     }
     chosen = chosen || def;
     fs.mkdirSync(chosen, { recursive: true });
